@@ -16,7 +16,8 @@
 
 static int g_noc = 0;
 static int client_sockets[MAX_CLIENTS];
-static int pipes[MAX_CLIENTS][2];
+static int pipes_to_child[MAX_CLIENTS][2];
+static int pipes_to_parent[MAX_CLIENTS][2];
 static char nicknames[MAX_CLIENTS][NICKNAME_SIZE];
 
 void sigchld_handler(int s) {
@@ -52,29 +53,29 @@ void handle_client(int client_index) {
     ssize_t str_len;
 
     while (1) {
-        str_len = read(pipes[client_index][0], mesg, BUF_SIZE - 1);
+        str_len = read(pipes_to_child[client_index][0], mesg, BUF_SIZE - 1);
         if (str_len > 0) {
             mesg[str_len] = 0;
             if (strncmp(mesg, "[NICKNAME]", 10) == 0) {
                 strncpy(nicknames[client_index], mesg + 10, NICKNAME_SIZE - 1);
                 nicknames[client_index][NICKNAME_SIZE - 1] = '\0';
                 printf("[시스템] 클라이언트 %d의 닉네임: %s\n", client_index, nicknames[client_index]);
+                
+                // 닉네임 설정 완료 메시지를 부모 프로세스에게 전송
+                char complete_msg[BUF_SIZE];
+                snprintf(complete_msg, BUF_SIZE, "[NICKNAME_SET]%d", client_index);
+                write(pipes_to_parent[client_index][1], complete_msg, strlen(complete_msg));
             } else {
                 char broadcast_msg[BUF_SIZE + NICKNAME_SIZE + 20];
                 snprintf(broadcast_msg, sizeof(broadcast_msg), "[%s] %s", nicknames[client_index], mesg);
-                broadcast_message(broadcast_msg, client_index);
+                write(pipes_to_parent[client_index][1], broadcast_msg, strlen(broadcast_msg));
             }
             fflush(stdout);
         } else if (str_len == 0) {
             printf("[시스템] 클라이언트 %s(ID: %d) 연결 종료\n", nicknames[client_index], client_index);
             close(client_sockets[client_index]);
-            close(pipes[client_index][0]);
-            close(pipes[client_index][1]);
-            client_sockets[client_index] = -1;
-            pipes[client_index][0] = -1;
-            pipes[client_index][1] = -1;
-            nicknames[client_index][0] = '\0';
-            g_noc--;
+            close(pipes_to_child[client_index][0]);
+            close(pipes_to_parent[client_index][1]);
             exit(0);
         }
     }
@@ -122,8 +123,10 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
         client_sockets[i] = -1;
-        pipes[i][0] = -1;
-        pipes[i][1] = -1;
+        pipes_to_child[i][0] = -1;
+        pipes_to_child[i][1] = -1;
+        pipes_to_parent[i][0] = -1;
+        pipes_to_parent[i][1] = -1;
         nicknames[i][0] = '\0';
     }
 
@@ -148,7 +151,7 @@ int main(int argc, char **argv) {
                 close(csock);
             } else {
                 client_sockets[client_index] = csock;
-                if (pipe(pipes[client_index]) == -1) {
+                if (pipe(pipes_to_child[client_index]) == -1 || pipe(pipes_to_parent[client_index]) == -1) {
                     perror("pipe");
                     close(csock);
                 } else {
@@ -156,17 +159,22 @@ int main(int argc, char **argv) {
                     pid_t pid = fork();
                     if (pid == 0) {  // 자식 프로세스
                         close(ssock);
-                        close(pipes[client_index][1]);
+                        close(pipes_to_child[client_index][1]);
+                        close(pipes_to_parent[client_index][0]);
                         handle_client(client_index);
                         exit(0);
                     } else if (pid > 0) {  // 부모 프로세스
-                        close(pipes[client_index][0]);
+                        close(pipes_to_child[client_index][0]);
+                        close(pipes_to_parent[client_index][1]);
                         set_nonblocking(csock);
+                        set_nonblocking(pipes_to_parent[client_index][0]);
                     } else {
                         perror("fork");
                         close(csock);
-                        close(pipes[client_index][0]);
-                        close(pipes[client_index][1]);
+                        close(pipes_to_child[client_index][0]);
+                        close(pipes_to_child[client_index][1]);
+                        close(pipes_to_parent[client_index][0]);
+                        close(pipes_to_parent[client_index][1]);
                     }
                 }
             }
@@ -180,12 +188,30 @@ int main(int argc, char **argv) {
                 ssize_t str_len = recv(client_sockets[i], mesg, BUF_SIZE - 1, MSG_DONTWAIT);
                 if (str_len > 0) {
                     mesg[str_len] = 0;
-                    write(pipes[i][1], mesg, str_len);
+                    write(pipes_to_child[i][1], mesg, str_len);
                 } else if (str_len == 0 || (str_len == -1 && errno != EWOULDBLOCK)) {
                     close(client_sockets[i]);
-                    close(pipes[i][1]);
+                    close(pipes_to_child[i][1]);
+                    close(pipes_to_parent[i][0]);
                     client_sockets[i] = -1;
-                    pipes[i][1] = -1;
+                    pipes_to_child[i][1] = -1;
+                    pipes_to_parent[i][0] = -1;
+                }
+            }
+        }
+
+        // 자식 프로세스로부터 메시지 읽기 및 브로드캐스팅
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (pipes_to_parent[i][0] != -1) {
+                ssize_t str_len = read(pipes_to_parent[i][0], mesg, BUF_SIZE - 1);
+                if (str_len > 0) {
+                    mesg[str_len] = 0;
+                    if (strncmp(mesg, "[NICKNAME_SET]", 14) == 0) {
+                        int client_id = atoi(mesg + 14);
+                        printf("[시스템] 클라이언트 %d의 닉네임 설정 완료\n", client_id);
+                    } else {
+                        broadcast_message(mesg, i);
+                    }
                 }
             }
         }
