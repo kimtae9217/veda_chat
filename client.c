@@ -9,20 +9,20 @@
 #include <signal.h>
 
 #define BUF_SIZE 100
-#define MAX_CLIENTS 50
 #define NICKNAME_SIZE 20
 
 void error_handling(char *message);
 void set_nonblocking(int sock);
+void handle_sigint(int sig);
+
+int sock;
+char nickname[NICKNAME_SIZE];
+int pipes[2][2];
 
 int main(int argc, char *argv[]) {
-    int sock;
-    char message[BUF_SIZE];
-    char nickname[NICKNAME_SIZE];
-    int str_len;
     struct sockaddr_in serv_adr;
     pid_t pid;
-    int pipes[2][2];
+    char message[BUF_SIZE];
 
     if (argc != 3) {
         printf("사용법: %s <IP> <port>\n", argv[0]);
@@ -55,12 +55,15 @@ int main(int argc, char *argv[]) {
     if (pipe(pipes[0]) == -1 || pipe(pipes[1]) == -1)
         error_handling("pipe() 오류");
 
+    signal(SIGINT, handle_sigint);
+
     pid = fork();
     if (pid == 0) { // 자식 프로세스: 서버로부터 메시지 수신
         close(pipes[0][1]);
         close(pipes[1][0]);
+
         while (1) {
-            str_len = read(sock, message, BUF_SIZE - 1);
+            int str_len = read(sock, message, BUF_SIZE - 1);
             if (str_len <= 0) {
                 break;
             }
@@ -69,22 +72,30 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
             write(pipes[1][1], message, str_len);
         }
-        close(sock);
+        kill(getppid(), SIGINT);
         exit(0);
     } else { // 부모 프로세스: 사용자 입력 처리 및 서버로 전송
         close(pipes[0][0]);
         close(pipes[1][1]);
+
         while (1) {
             fgets(message, BUF_SIZE, stdin);
             if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
-                kill(pid, SIGTERM);
+                kill(pid, SIGINT);
                 break;
             }
             write(sock, message, strlen(message));
         }
-        close(sock);
     }
+
+    close(sock);
     return 0;
+}
+
+void error_handling(char *message) {
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
 }
 
 void set_nonblocking(int sock) {
@@ -92,8 +103,8 @@ void set_nonblocking(int sock) {
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 }
 
-void error_handling(char *message) {
-    fputs(message, stderr);
-    fputc('\n', stderr);
-    exit(1);
+void handle_sigint(int sig) {
+    close(sock);
+    printf("\n채팅을 종료합니다.\n");
+    exit(0);
 }
