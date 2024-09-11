@@ -6,8 +6,11 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 
 #define BUF_SIZE 100
+#define MAX_CLIENTS 50
+#define NICKNAME_SIZE 20
 
 void error_handling(char *message);
 void set_nonblocking(int sock);
@@ -15,17 +18,20 @@ void set_nonblocking(int sock);
 int main(int argc, char *argv[]) {
     int sock;
     char message[BUF_SIZE];
+    char nickname[NICKNAME_SIZE];
     int str_len;
     struct sockaddr_in serv_adr;
+    pid_t pid;
+    int pipes[2][2];
 
     if (argc != 3) {
-        printf("Usage : %s <IP> <port>\n", argv[0]);
+        printf("사용법: %s <IP> <port>\n", argv[0]);
         exit(1);
     }
 
     sock = socket(PF_INET, SOCK_STREAM, 0);
     if (sock == -1)
-        error_handling("socket() error");
+        error_handling("socket() 오류");
 
     memset(&serv_adr, 0, sizeof(serv_adr));
     serv_adr.sin_family = AF_INET;
@@ -33,41 +39,51 @@ int main(int argc, char *argv[]) {
     serv_adr.sin_port = htons(atoi(argv[2]));
 
     if (connect(sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
-        error_handling("connect() error");
+        error_handling("connect() 오류");
     else
-        puts("Connected...........");
+        puts("연결되었습니다...........");
 
-    set_nonblocking(sock);
-    set_nonblocking(STDIN_FILENO);
+    // 닉네임 입력 받기
+    printf("닉네임을 입력하세요 (최대 %d자): ", NICKNAME_SIZE - 1);
+    fgets(nickname, NICKNAME_SIZE, stdin);
+    nickname[strcspn(nickname, "\n")] = 0;  // 개행 문자 제거
 
-    while (1) {
-        // 서버로부터 메시지 수신 시도
-        str_len = recv(sock, message, BUF_SIZE - 1, 0);
-        if (str_len > 0) {
-            message[str_len] = 0;
-            printf("서버로부터 받은 메시지: %s", message);
-            fflush(stdout);
-        } else if (str_len == -1 && errno != EWOULDBLOCK) {
-            error_handling("recv() error");
-        } else if (str_len == 0) {
-            printf("서버 연결 종료\n");
-            break;
-        }
+    // 서버에 닉네임 전송
+    sprintf(message, "[NICKNAME]%s", nickname);
+    write(sock, message, strlen(message));
 
-        // 사용자 입력 확인
-        str_len = read(STDIN_FILENO, message, BUF_SIZE - 1);
-        if (str_len > 0) {
-            message[str_len] = 0;
-            if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
+    if (pipe(pipes[0]) == -1 || pipe(pipes[1]) == -1)
+        error_handling("pipe() 오류");
+
+    pid = fork();
+    if (pid == 0) { // 자식 프로세스: 서버로부터 메시지 수신
+        close(pipes[0][1]);
+        close(pipes[1][0]);
+        while (1) {
+            str_len = read(sock, message, BUF_SIZE - 1);
+            if (str_len <= 0) {
                 break;
             }
-            send(sock, message, strlen(message), 0);
-        } else if (str_len == -1 && errno != EWOULDBLOCK) {
-            error_handling("read() error");
+            message[str_len] = 0;
+            printf("%s", message);
+            fflush(stdout);
+            write(pipes[1][1], message, str_len);
         }
+        close(sock);
+        exit(0);
+    } else { // 부모 프로세스: 사용자 입력 처리 및 서버로 전송
+        close(pipes[0][0]);
+        close(pipes[1][1]);
+        while (1) {
+            fgets(message, BUF_SIZE, stdin);
+            if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
+                kill(pid, SIGTERM);
+                break;
+            }
+            write(sock, message, strlen(message));
+        }
+        close(sock);
     }
-
-    close(sock);
     return 0;
 }
 
