@@ -34,14 +34,16 @@ static char nicknames[MAX_CLIENTS][NICKNAME_SIZE];
 
 void sigchld_handler(int s) {
     int saved_errno = errno;
-    while (waitpid(-1, NULL, WNOHANG) > 0) {
+    pid_t pid;
+    int status;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         g_noc--;
     }
     errno = saved_errno;
 
     if (g_noc == 0) {
         printf("모든 클라이언트 연결이 종료되었습니다. 서버를 종료합니다.\n");
-        exit(0);
+        exit(0);  // 서버 즉시 종료
     }
 }
 
@@ -56,8 +58,7 @@ void send_message(ChatMessage *message, int sender_index) {
             send(client_sockets[i], message, sizeof(ChatMessage), 0);
         }
     }
-    printf("%s", message->content);
-    //printf("[%s] %s", message->nickname, message->content);
+    printf("[%s] %s", message->nickname, message->content);
     fflush(stdout);
 }
 
@@ -73,25 +74,28 @@ void handle_client(int client_index) {
                 nicknames[client_index][NICKNAME_SIZE - 1] = '\0';
                 printf(" 클라이언트 %d의 닉네임: %s\n", client_index, nicknames[client_index]);
                 
-                // 닉네임 설정 완료 메시지를 부모 프로세스에게 전송
                 ChatMessage complete_msg = {MSG_CHAT, "Server", ""};
                 snprintf(complete_msg.content, BUF_SIZE, "[NICKNAME_SET]%d", client_index);
                 write(pipes_to_parent[client_index][1], &complete_msg, sizeof(ChatMessage));
+            } else if (message.type == MSG_LOGOUT) {
+                printf("클라이언트 %s(ID: %d) 연결 종료\n", nicknames[client_index], client_index);
+                ChatMessage logout_msg = {MSG_LOGOUT, "Server", ""};
+                snprintf(logout_msg.content, BUF_SIZE, "%s 님께서 퇴장했습니다.\n", nicknames[client_index]);
+                write(pipes_to_parent[client_index][1], &logout_msg, sizeof(ChatMessage));
+                break;
             } else {
                 write(pipes_to_parent[client_index][1], &message, sizeof(ChatMessage));
             }
             fflush(stdout);
-        } else if (str_len == 0) {
-            printf("클라이언트 %s(ID: %d) 연결 종료\n", nicknames[client_index], client_index);
-
-            ChatMessage logout_msg = {MSG_LOGOUT, "Server", ""};
-            snprintf(logout_msg.content, BUF_SIZE, "%s 님께서 퇴장했습니다.\n", nicknames[client_index]);
-            close(client_sockets[client_index]);
-            close(pipes_to_child[client_index][0]);
-            close(pipes_to_parent[client_index][1]);
-            exit(0);
+        } else if (str_len <= 0) {
+            break;
         }
     }
+
+    close(client_sockets[client_index]);
+    close(pipes_to_child[client_index][0]);
+    close(pipes_to_parent[client_index][1]);
+    exit(0);
 }
 
 int main(int argc, char **argv) {
@@ -102,12 +106,12 @@ int main(int argc, char **argv) {
 
     portno = (argc == 2) ? atoi(argv[1]) : TCP_PORT;
 
-    struct sigaction sa;
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-        perror("sigaction");
+    struct sigaction sa_chld;
+    sa_chld.sa_handler = sigchld_handler;
+    sigemptyset(&sa_chld.sa_mask);
+    sa_chld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    if (sigaction(SIGCHLD, &sa_chld, NULL) == -1) {
+        perror("sigaction (SIGCHLD)");
         exit(1);
     }
 
@@ -189,6 +193,7 @@ int main(int argc, char **argv) {
                         close(pipes_to_child[client_index][1]);
                         close(pipes_to_parent[client_index][0]);
                         close(pipes_to_parent[client_index][1]);
+                        g_noc--;
                     }
                 }
             }
@@ -201,13 +206,9 @@ int main(int argc, char **argv) {
             if (client_sockets[i] != -1) {
                 ssize_t str_len = recv(client_sockets[i], &mesg, sizeof(ChatMessage), MSG_DONTWAIT);
                 if (str_len > 0) {
-                    if(mesg.type == MSG_LOGOUT) {
-                        ChatMessage logout_msg = {MSG_LOGOUT, "Server", ""};
-                        snprintf(logout_msg.content, BUF_SIZE, "%s님이 나가셨습니다.\n", nicknames[i]);
-                        send_message(&logout_msg, i);
-                    }
                     write(pipes_to_child[i][1], &mesg, sizeof(ChatMessage));
                 } else if (str_len == 0 || (str_len == -1 && errno != EWOULDBLOCK)) {
+                    // 클라이언트 연결 종료 처리
                     close(client_sockets[i]);
                     close(pipes_to_child[i][1]);
                     close(pipes_to_parent[i][0]);
@@ -232,8 +233,24 @@ int main(int argc, char **argv) {
                 }
             }
         }
+
+        // 잠시 대기하여 CPU 사용률 감소
+        usleep(10000);  // 10ms 대기
     }
 
+    // 서버 종료 전 정리 작업
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (client_sockets[i] != -1) {
+            close(client_sockets[i]);
+        }
+        if (pipes_to_child[i][1] != -1) {
+            close(pipes_to_child[i][1]);
+        }
+        if (pipes_to_parent[i][0] != -1) {
+            close(pipes_to_parent[i][0]);
+        }
+    }
     close(ssock);
+    printf("서버가 정상적으로 종료되었습니다.\n");
     return 0;
 }
