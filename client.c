@@ -15,6 +15,18 @@
 #define ANSI_COLOR_YELLOW  "\x1b[33m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
 
+typedef enum {
+    MSG_NICKNAME,
+    MSG_CHAT,
+    MSG_LOGOUT
+} MessageType;
+
+typedef struct {
+    MessageType type;
+    char nickname[NICKNAME_SIZE];
+    char content[BUF_SIZE];
+} ChatMessage;
+
 void error_handling(char *message);
 void handle_sigint(int sig);
 void receive_messages(int sock, const char *my_nickname);
@@ -49,9 +61,10 @@ int main(int argc, char *argv[]) {
     fgets(nickname, NICKNAME_SIZE, stdin);
     nickname[strcspn(nickname, "\n")] = 0;  // 개행 문자 제거
 
-    char message[BUF_SIZE];
-    sprintf(message, "[NICKNAME]%s", nickname);
-    write(sock, message, strlen(message));
+    ChatMessage init_message = {MSG_NICKNAME, "", ""};
+    strncpy(init_message.nickname, nickname, NICKNAME_SIZE - 1);
+    init_message.nickname[NICKNAME_SIZE - 1] = '\0';
+    write(sock, &init_message, sizeof(ChatMessage));
 
     printf("───────── VEDA 채팅방에 들어오신 것을 환영합니다─────────\n");
     signal(SIGINT, handle_sigint);
@@ -70,64 +83,38 @@ int main(int argc, char *argv[]) {
 }
 
 void receive_messages(int sock, const char *my_nickname) {
-    char message[BUF_SIZE];
-    char nickname[NICKNAME_SIZE];
-    char content[BUF_SIZE];
+    ChatMessage message;
     
     while (1) {
-        int str_len = read(sock, message, BUF_SIZE - 1);
+        int str_len = read(sock, &message, sizeof(ChatMessage));
         if (str_len <= 0) {
             break;
         }
-        message[str_len] = 0;
 
-
-
-        // Extract nickname and content from the message
-        char *token = strtok(message, "[]");
-        if (token != NULL) {
-            strncpy(nickname, token, NICKNAME_SIZE - 1);
-            nickname[NICKNAME_SIZE - 1] = '\0';
-            token = strtok(NULL, "");
-            if (token != NULL) {
-                strncpy(content, token + 1, BUF_SIZE - 1);  // +1 to skip the space
-                content[BUF_SIZE - 1] = '\0';
-            } else {
-                strcpy(content, "");
-            }
-        } else {
-            strcpy(nickname, "Unknown");
-            strcpy(content, message);
-        }
-
-        // Check if it's my message or other's
-        int is_my_message = (strcmp(nickname, my_nickname) == 0);
-        
-        print_aligned_message(nickname, content, is_my_message);
+        int is_my_message = (strcmp(message.nickname, my_nickname) == 0);
+        print_aligned_message(message.nickname, message.content, is_my_message);
     }
     kill(getppid(), SIGINT);
     exit(0);
 }
 
 void send_messages(int sock, const char *nickname) {
-    char message[BUF_SIZE];
-    char formatted_message[BUF_SIZE + NICKNAME_SIZE + 3];  // +3 for [], and space
+    ChatMessage message;
+    strncpy(message.nickname, nickname, NICKNAME_SIZE - 1);
+    message.nickname[NICKNAME_SIZE - 1] = '\0';
+
     while (1) {
-        
-        fgets(message, BUF_SIZE, stdin);
-        if (!strcmp(message, "q\n") || !strcmp(message, "Q\n")) {
-            snprintf(formatted_message, sizeof(formatted_message), "[LOGOUT] %s님께서 퇴장했습니다.\n", nickname);
-            write(sock, formatted_message, strlen(formatted_message));
+        fgets(message.content, BUF_SIZE, stdin);
+        if (!strcmp(message.content, "q\n") || !strcmp(message.content, "Q\n")) {
+            message.type = MSG_LOGOUT;
+            snprintf(message.content, BUF_SIZE, "%s님께서 퇴장했습니다.", nickname);
+            write(sock, &message, sizeof(ChatMessage));
             break;
         }
-        snprintf(formatted_message, sizeof(formatted_message), "[%s] %s", nickname, message);
-        write(sock, formatted_message, strlen(formatted_message));
-        
+        message.type = MSG_CHAT;
+        write(sock, &message, sizeof(ChatMessage));
 
-        // Print the sent message aligned to the right
-        print_aligned_message(nickname, message, 1);
-
-
+        print_aligned_message(nickname, message.content, 1);
     }
     kill(getpid(), SIGINT);
 }
@@ -140,15 +127,10 @@ void print_aligned_message(const char *nickname, const char *message, int is_my_
     char formatted_message[BUF_SIZE + NICKNAME_SIZE + 3];
     snprintf(formatted_message, sizeof(formatted_message), "[%s] %s", nickname, message);
     
-   /* int message_length = strlen(formatted_message);
-    if (message_length > terminal_width) {
-        message_length = terminal_width;
-    }*/
-    
     if (is_my_message) {
-        printf(ANSI_COLOR_GREEN "%*s\n" ANSI_COLOR_RESET "\n", terminal_width, formatted_message);
+        printf(ANSI_COLOR_GREEN "%*s" ANSI_COLOR_RESET "\n", terminal_width, formatted_message);
     } else {
-        printf(ANSI_COLOR_YELLOW "%s\n" ANSI_COLOR_RESET "\n", formatted_message);
+        printf(ANSI_COLOR_YELLOW "%s" ANSI_COLOR_RESET "\n", formatted_message);
     }
     fflush(stdout);
 }

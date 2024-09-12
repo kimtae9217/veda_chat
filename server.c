@@ -14,6 +14,18 @@
 #define BUF_SIZE 100
 #define NICKNAME_SIZE 20
 
+typedef enum {
+    MSG_NICKNAME,
+    MSG_CHAT,
+    MSG_LOGOUT
+} MessageType;
+
+typedef struct {
+    MessageType type;
+    char nickname[NICKNAME_SIZE];
+    char content[BUF_SIZE];
+} ChatMessage;
+
 static int g_noc = 0;
 static int client_sockets[MAX_CLIENTS];
 static int pipes_to_child[MAX_CLIENTS][2];
@@ -38,44 +50,42 @@ void set_nonblocking(int sock) {
     fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 }
 
-void send_message(char *message, int sender_index) {
+void send_message(ChatMessage *message, int sender_index) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (client_sockets[i] != -1 && i != sender_index) {
-            send(client_sockets[i], message, strlen(message), 0);
+            send(client_sockets[i], message, sizeof(ChatMessage), 0);
         }
     }
-    printf("%s", message);
+    printf("%s", message->content);
+    //printf("[%s] %s", message->nickname, message->content);
     fflush(stdout);
 }
 
 void handle_client(int client_index) {
-    char mesg[BUF_SIZE];
+    ChatMessage message;
     ssize_t str_len;
 
     while (1) {
-        str_len = read(pipes_to_child[client_index][0], mesg, BUF_SIZE - 1);
+        str_len = read(pipes_to_child[client_index][0], &message, sizeof(ChatMessage));
         if (str_len > 0) {
-            mesg[str_len] = 0;
-            if (strncmp(mesg, "[NICKNAME]", 10) == 0) {
-                strncpy(nicknames[client_index], mesg + 10, NICKNAME_SIZE - 1);
+            if (message.type == MSG_NICKNAME) {
+                strncpy(nicknames[client_index], message.nickname, NICKNAME_SIZE - 1);
                 nicknames[client_index][NICKNAME_SIZE - 1] = '\0';
                 printf(" 클라이언트 %d의 닉네임: %s\n", client_index, nicknames[client_index]);
                 
                 // 닉네임 설정 완료 메시지를 부모 프로세스에게 전송
-                char complete_msg[BUF_SIZE];
-                snprintf(complete_msg, BUF_SIZE, "[NICKNAME_SET]%d", client_index);
-                write(pipes_to_parent[client_index][1], complete_msg, strlen(complete_msg));
+                ChatMessage complete_msg = {MSG_CHAT, "Server", ""};
+                snprintf(complete_msg.content, BUF_SIZE, "[NICKNAME_SET]%d", client_index);
+                write(pipes_to_parent[client_index][1], &complete_msg, sizeof(ChatMessage));
             } else {
-                char broadcast_msg[BUF_SIZE + NICKNAME_SIZE + 20];
-                snprintf(broadcast_msg, sizeof(broadcast_msg), "%s", mesg);
-                write(pipes_to_parent[client_index][1], broadcast_msg, strlen(broadcast_msg));
+                write(pipes_to_parent[client_index][1], &message, sizeof(ChatMessage));
             }
             fflush(stdout);
         } else if (str_len == 0) {
             printf("클라이언트 %s(ID: %d) 연결 종료\n", nicknames[client_index], client_index);
 
-            char logout_msg[BUF_SIZE + NICKNAME_SIZE];
-            snprintf(logout_msg, sizeof(logout_msg), "%s 님께서 퇴장했습니다.\n", nicknames[client_index]);
+            ChatMessage logout_msg = {MSG_LOGOUT, "Server", ""};
+            snprintf(logout_msg.content, BUF_SIZE, "%s 님께서 퇴장했습니다.\n", nicknames[client_index]);
             close(client_sockets[client_index]);
             close(pipes_to_child[client_index][0]);
             close(pipes_to_parent[client_index][1]);
@@ -88,7 +98,7 @@ int main(int argc, char **argv) {
     int ssock, portno;
     socklen_t clen;
     struct sockaddr_in servaddr, cliaddr;
-    char mesg[BUF_SIZE];
+    ChatMessage mesg;
 
     portno = (argc == 2) ? atoi(argv[1]) : TCP_PORT;
 
@@ -139,14 +149,15 @@ int main(int argc, char **argv) {
     while (1) {
         int csock = accept(ssock, (struct sockaddr *)&cliaddr, &clen);
         if (csock > 0) {
-            inet_ntop(AF_INET, &cliaddr.sin_addr, mesg, BUF_SIZE);
+            char ip[BUF_SIZE];
+            inet_ntop(AF_INET, &cliaddr.sin_addr, ip, BUF_SIZE);
             int client_index;
             for (client_index = 0; client_index < MAX_CLIENTS; client_index++) {
                 if (client_sockets[client_index] == -1) {
                     break;
                 }
             }
-            printf("새 클라이언트 연결: ID %d, IP %s\n", client_index, mesg);
+            printf("새 클라이언트 연결: ID %d, IP %s\n", client_index, ip);
             fflush(stdout);
 
             if (g_noc >= MAX_CLIENTS) {
@@ -188,15 +199,14 @@ int main(int argc, char **argv) {
         // 모든 클라이언트로부터 메시지 읽기
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (client_sockets[i] != -1) {
-                ssize_t str_len = recv(client_sockets[i], mesg, BUF_SIZE - 1, MSG_DONTWAIT);
+                ssize_t str_len = recv(client_sockets[i], &mesg, sizeof(ChatMessage), MSG_DONTWAIT);
                 if (str_len > 0) {
-                    mesg[str_len] = 0;
-                    if(strncmp(mesg, "[LOGOUT]", 8) == 0){
-                        char logout_msg[BUF_SIZE + NICKNAME_SIZE];
-                        snprintf(logout_msg, sizeof(logout_msg), "%s님이 나가셨습니다.\n", nicknames[i]);
+                    if(mesg.type == MSG_LOGOUT) {
+                        ChatMessage logout_msg = {MSG_LOGOUT, "Server", ""};
+                        snprintf(logout_msg.content, BUF_SIZE, "%s님이 나가셨습니다.\n", nicknames[i]);
+                        send_message(&logout_msg, i);
                     }
-
-                    write(pipes_to_child[i][1], mesg, str_len);
+                    write(pipes_to_child[i][1], &mesg, sizeof(ChatMessage));
                 } else if (str_len == 0 || (str_len == -1 && errno != EWOULDBLOCK)) {
                     close(client_sockets[i]);
                     close(pipes_to_child[i][1]);
@@ -211,14 +221,13 @@ int main(int argc, char **argv) {
         // 자식 프로세스로부터 메시지 읽기 및 메세지 보내기
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (pipes_to_parent[i][0] != -1) {
-                ssize_t str_len = read(pipes_to_parent[i][0], mesg, BUF_SIZE - 1);
+                ssize_t str_len = read(pipes_to_parent[i][0], &mesg, sizeof(ChatMessage));
                 if (str_len > 0) {
-                    mesg[str_len] = 0;
-                    if (strncmp(mesg, "[NICKNAME_SET]", 14) == 0) {
-                        int client_id = atoi(mesg + 14);
+                    if (strncmp(mesg.content, "[NICKNAME_SET]", 14) == 0) {
+                        int client_id = atoi(mesg.content + 14);
                         //printf("클라이언트 %d의 닉네임 설정 완료\n", client_id);
                     } else {
-                        send_message(mesg, i);
+                        send_message(&mesg, i);
                     }
                 }
             }
