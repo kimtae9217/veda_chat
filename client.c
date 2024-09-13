@@ -94,7 +94,7 @@ int main(int argc, char *argv[]) {
     mvhline(max_y - 4, 0, ACS_HLINE, max_x);
 
     // 환영 메시지 출력
-    wprintw(chat_win, "──────────────────────VEDA 채팅방에 들어오신 것을 환영합니다 ─────────────────────\n");
+    wprintw(chat_win, "  ──────────────────VEDA 채팅방에 들어오신 것을 환영합니다 ──────────────────  \n");
 
     // 화면 새로고침
     refresh();
@@ -179,7 +179,7 @@ void print_chat_message(WINDOW *chat_win, const char *nickname, const char *mess
     getyx(chat_win, cur_y, cur_x);
 
     // 메시지 길이 계산
-    int msg_len = strlen(nickname) + strlen(message) + 3; // []:  형식 고려
+    int msg_len = strlen(nickname) + strlen(message) + 3; // []: 길이를 고려하기 위해
 
     // 퇴장 메시지인 경우 출력
     if (strstr(message, "님께서 퇴장했습니다.")) {
