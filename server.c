@@ -60,12 +60,6 @@ int main(int argc, char **argv) {
     int fd0, fd1, fd2, i;
     pid_t pid;
 
-    portno = (argc == 2) ? atoi(argv[1]) : TCP_PORT;
-
-     if(argc < 2){
-        printf("Usage : %s command\n", argv[0]);
-        return -1;
-    }
 
     umask(0);
 
@@ -112,13 +106,6 @@ int main(int argc, char **argv) {
 
     syslog(LOG_INFO, "Daemon Process");
 
-    while(1){
-
-    }
-    closelog();
-
-    return 0;
-
     sa_chld.sa_handler = sigchld_handler;
     sigemptyset(&sa_chld.sa_mask);
     sa_chld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
@@ -148,6 +135,8 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    
+    portno = (argc == 2) ? atoi(argv[1]) : TCP_PORT;
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -294,6 +283,8 @@ int main(int argc, char **argv) {
     }
     close(ssock);
     printf("서버가 정상적으로 종료되었습니다.\n");
+
+    closelog();
     return 0;
 }
 
