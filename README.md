@@ -27,3 +27,6 @@
 	- 메세지 큐나 공유 메모리 사용 불가
 	- 스레드 사용 불가
 
+
+## 🛠️ Architecture
+  ![image](https://github.com/user-attachments/assets/9b5b29ab-fc06-4fec-89c5-0b1750cbff74)
