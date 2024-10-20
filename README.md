@@ -30,3 +30,33 @@
 
 ## 🛠️ Architecture
   ![image](https://github.com/user-attachments/assets/9b5b29ab-fc06-4fec-89c5-0b1750cbff74)
+
+## Manual
+
+- Install
+```bash
+sudo apt-get update
+sudo apt-get install libncurses5-dev libncursesw5-dev
+```
+
+- Complie (Makefile)
+```bash
+make
+```
+or
+```bash
+gcc -o server server.c
+gcc -o client client.c -lncurses
+```
+
+- Start
+
+한 개의 터미널을 켜서 실행 (Server)
+```bash
+./server
+```
+또 하나의 터미널을 켜서 실행 (Client)
+```bash
+./client 127.0.0.1 5100
+```
+
