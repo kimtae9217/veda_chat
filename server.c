@@ -49,7 +49,7 @@ void sigusr2_handler(int signo);
 void set_nonblocking(int sock);
 void send_message(ChatMessage *message, int sender_index);
 void handle_client(int client_index);
-
+void close_client_connection(int client_index);
 
 int main(int argc, char **argv) {
     int ssock, portno;
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     int fd0, fd1, fd2, i;
     pid_t pid;
 
-
+    // 데몬 서버 설정
     umask(0);
 
     if(getrlimit(RLIMIT_NOFILE, &rl) < 0){
@@ -229,11 +229,7 @@ int main(int argc, char **argv) {
                     write(pipes_to_child[i][1], &mesg, sizeof(ChatMessage));
                 } else if (str_len == 0 || (str_len == -1 && errno != EWOULDBLOCK)) {
                     // 클라이언트 연결 종료 처리
-                    close(client_sockets[i]);
-                    close(pipes_to_child[i][1]);
-                    close(pipes_to_parent[i][0]);
-                    client_sockets[i] = -1;
-                    g_noc--;
+                    close_client_connection(i);
                 }
             }
         }
@@ -276,9 +272,7 @@ int main(int argc, char **argv) {
     // 서버 종료 전 정리 작업
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (client_sockets[i] != -1) {
-            close(client_sockets[i]);
-            close(pipes_to_child[i][1]);
-            close(pipes_to_parent[i][0]);
+            close_client_connection(i);
         }
     }
     close(ssock);
@@ -363,4 +357,25 @@ void handle_client(int client_index) {
     close(pipes_to_child[client_index][0]);
     close(pipes_to_parent[client_index][1]);
     exit(0);
+}
+
+void close_client_connection(int client_index) {
+    if (client_sockets[client_index] != -1) {
+        close(client_sockets[client_index]);
+        client_sockets[client_index] = -1;
+    }
+    if (pipes_to_child[client_index][1] != -1) {
+        close(pipes_to_child[client_index][1]);
+        pipes_to_child[client_index][1] = -1;
+    }
+    if (pipes_to_parent[client_index][0] != -1) {
+        close(pipes_to_parent[client_index][0]);
+        pipes_to_parent[client_index][0] = -1;
+    }
+    if (child_pids[client_index] != -1) {
+        kill(child_pids[client_index], SIGTERM);
+        child_pids[client_index] = -1;
+    }
+    g_noc--;
+    printf("클라이언트 %d 연결이 종료되었습니다. 현재 연결 수: %d\n", client_index, g_noc);
 }
