@@ -59,4 +59,13 @@ gcc -o client client.c -lncurses
 ```bash
 ./client 127.0.0.1 5100
 ```
+</br>
+
+## Daemon Server
+데몬 서버이기 때문에 실행하고 난 후 아무것도 뜨지 않음. 아래와 같은 명령어로 데몬서버가 실행 중인지 확인
+```bash
+ps aux | grep server
+```
+## 결과 화면 (Client)
+![image](https://github.com/user-attachments/assets/c728e0a5-e072-4d16-83ed-4d7cd733cf44)
 
